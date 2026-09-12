@@ -895,8 +895,9 @@ static void synth_worker(std::shared_ptr<Job>    job,
 // returns JSON {"id":"N"} immediately.
 // input:
 //   application/json body        -> single request {} or batch [{req0}, {req1}, ...]
-//   multipart/form-data          -> single request + optional audio or latents
-//     part "request":     JSON text (model selection, output_format, etc.)
+//   multipart/form-data          -> same request JSON + optional audio or latents
+//     part "request":     JSON text, single {} or batch [{req0}, {req1}, ...]
+//                         (model selection, output_format, etc.)
 //     part "audio":       source audio (WAV or MP3)
 //     part "src_latents": pre-encoded source latents (raw f32, [T*64]), wins over "audio"
 //     part "ref_audio":   timbre reference audio (WAV or MP3), optional
@@ -927,9 +928,8 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
     int                     ref_T_latent = 0;
 
     if (req.is_multipart_form_data()) {
-        // multipart mode: single request + optional audio files or src_latents
-        AceRequest ace_req;
-
+        // multipart mode: request JSON plus optional audio files or src_latents.
+        // The source and the timbre reference are shared by every request of a batch.
         std::string json_body;
         if (req.form.has_file("request")) {
             json_body = req.form.get_file("request").content;
@@ -939,7 +939,7 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
             json_error(res, 400, "Multipart: missing 'request' part");
             return;
         }
-        if (!request_parse_json(&ace_req, json_body.c_str())) {
+        if (!request_parse_json_array(json_body.c_str(), &ace_reqs)) {
             json_error(res, 400, "Multipart: invalid JSON in 'request' part");
             return;
         }
@@ -1015,7 +1015,6 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
                 }
             }
         }
-        ace_reqs.push_back(ace_req);
     } else {
         // plain JSON body: single object {} or array [{}, ...]
         if (!request_parse_json_array(req.body.c_str(), &ace_reqs)) {
